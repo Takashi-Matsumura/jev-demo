@@ -1,15 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import type { CommandResult } from "@/app/api/command/route";
-import type { JevAnswer, JevQuestion } from "@/lib/jev";
+import type { JevAnswer, JevExchange, JevQuestion } from "@/lib/jev";
 
 export type ConsoleEntry = {
   id: string;
   /** 送信時刻 HH:MM:SS */
   at: string;
+  /** 何を送ったかの見出し（指示文、PDF のチャンク番号など） */
   command: string;
-} & ({ ok: true; result: CommandResult } | { ok: false; error: string });
+} & ({ ok: true; exchange: JevExchange } | { ok: false; error: string });
 
 type Tab = "pairs" | "request" | "response";
 
@@ -125,7 +125,7 @@ function EntryBlock({
         </span>
         <span className="flex-1 text-xs leading-5">{entry.command}</span>
         <span className="mt-0.5 font-mono text-[10px] text-zinc-400">
-          {entry.ok ? `${entry.result.elapsedMs}ms` : "error"}
+          {entry.ok ? `${entry.exchange.elapsedMs}ms` : "error"}
         </span>
       </button>
 
@@ -137,19 +137,10 @@ function EntryBlock({
             </p>
           ) : (
             <>
-              <Meter result={entry.result} />
-              {tab === "pairs" && <Pairs result={entry.result} />}
-              {tab === "request" && (
-                <Json
-                  value={{
-                    endpoint: entry.result.request.endpoint,
-                    model: entry.result.request.model,
-                    state: entry.result.request.state,
-                    questions: entry.result.request.questions,
-                  }}
-                />
-              )}
-              {tab === "response" && <Json value={entry.result.response} />}
+              <Meter exchange={entry.exchange} />
+              {tab === "pairs" && <Pairs exchange={entry.exchange} />}
+              {tab === "request" && <Json value={entry.exchange.request} />}
+              {tab === "response" && <Json value={entry.exchange.response} />}
             </>
           )}
         </div>
@@ -158,8 +149,8 @@ function EntryBlock({
   );
 }
 
-function Meter({ result }: { result: CommandResult }) {
-  const count = Object.keys(result.request.questions).length;
+function Meter({ exchange }: { exchange: JevExchange }) {
+  const count = Object.keys(exchange.request.questions).length;
   return (
     <dl className="mb-3 grid grid-cols-3 gap-2 rounded-md bg-white px-3 py-2 font-mono text-[10px] dark:bg-zinc-900">
       <div>
@@ -168,13 +159,13 @@ function Meter({ result }: { result: CommandResult }) {
       </div>
       <div>
         <dt className="text-zinc-400">latency</dt>
-        <dd>{result.elapsedMs}ms</dd>
+        <dd>{exchange.elapsedMs}ms</dd>
       </div>
       <div>
         <dt className="text-zinc-400">tokens</dt>
         <dd>
-          {result.response.usage.input_tokens} /{" "}
-          {result.response.usage.output_tokens}
+          {exchange.response.usage.input_tokens} /{" "}
+          {exchange.response.usage.output_tokens}
         </dd>
       </div>
     </dl>
@@ -182,15 +173,15 @@ function Meter({ result }: { result: CommandResult }) {
 }
 
 /** 質問とその答えを 1 対 1 で並べる。jev の挙動を追うのが目的のビュー。 */
-function Pairs({ result }: { result: CommandResult }) {
+function Pairs({ exchange }: { exchange: JevExchange }) {
   return (
     <div className="flex flex-col gap-3">
-      {Object.entries(result.request.questions).map(([key, question]) => (
+      {Object.entries(exchange.request.questions).map(([key, question]) => (
         <Pair
           key={key}
           name={key}
           question={question}
-          answer={result.response.answers[key]}
+          answer={exchange.response.answers[key]}
         />
       ))}
     </div>
