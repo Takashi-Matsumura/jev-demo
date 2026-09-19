@@ -3,8 +3,8 @@
  * https://docs.typesafe.ai/api
  */
 
-const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
-const MODEL = "jev-latest";
+export const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
+export const MODEL = "jev-latest";
 
 export type NoulQuestion = {
   type: "noul";
