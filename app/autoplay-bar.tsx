@@ -8,6 +8,8 @@ const PHASE_LABELS: Record<AutoplayPhase, string> = {
   resetting: "初期状態に戻しています",
   typing: "入力中",
   sending: "jev に問い合わせ中",
+  retrying: "失敗したのでやり直します",
+  suspended: "中断中（復帰を待っています）",
   confirming: "確認待ち（まもなく自動で承認します）",
   holding: "結果を表示中",
 };
@@ -17,13 +19,25 @@ export default function AutoplayBar({
   scenario,
   onScenarioChange,
   autoplay,
+  lastError,
 }: {
   scenarios: Scenario[];
   scenario: Scenario;
   onScenarioChange: (id: string) => void;
   autoplay: AutoplayControls;
+  /** 直近の送信エラー。中断の理由として見せる */
+  lastError: string | null;
 }) {
-  const { running, paused, stepIndex, phase, remaining, totalWait } = autoplay;
+  const {
+    running,
+    paused,
+    stepIndex,
+    phase,
+    remaining,
+    totalWait,
+    failures,
+    suspended,
+  } = autoplay;
   const step = stepIndex >= 0 ? scenario.steps[stepIndex] : null;
   const progress =
     totalWait > 0 ? 1 - Math.min(remaining, totalWait) / totalWait : 0;
@@ -34,11 +48,13 @@ export default function AutoplayBar({
         <span className="flex items-center gap-2 text-sm font-semibold">
           <span
             className={`h-2 w-2 rounded-full ${
-              running
-                ? paused
-                  ? "bg-amber-500"
-                  : "animate-pulse bg-emerald-500"
-                : "bg-zinc-300 dark:bg-zinc-700"
+              !running
+                ? "bg-zinc-300 dark:bg-zinc-700"
+                : suspended
+                  ? "animate-pulse bg-red-500"
+                  : paused
+                    ? "bg-amber-500"
+                    : "animate-pulse bg-emerald-500"
             }`}
           />
           オートプレイ
@@ -111,7 +127,33 @@ export default function AutoplayBar({
         </span>
       </div>
 
-      {step && (
+      {suspended && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-red-300 bg-red-50 px-4 py-3 dark:border-red-900 dark:bg-red-950/50">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-red-900 dark:text-red-200">
+              jev への問い合わせが {failures} 回続けて失敗しました
+            </p>
+            <p className="mt-0.5 text-xs leading-5 text-red-800 dark:text-red-300">
+              シナリオを進めずに、同じ手順で再試行しています
+              {remaining > 0 && `（あと ${Math.ceil(remaining / 1000)} 秒）`}。
+              {lastError && (
+                <span className="ml-1 font-mono text-[10px] opacity-80">
+                  {lastError}
+                </span>
+              )}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={autoplay.skip}
+            className="rounded-md border border-red-400 px-3 py-1.5 text-xs text-red-900 dark:border-red-800 dark:text-red-200"
+          >
+            今すぐ再試行
+          </button>
+        </div>
+      )}
+
+      {step && !suspended && (
         <div className="flex flex-col gap-2 rounded-lg bg-zinc-50 px-4 py-3 dark:bg-zinc-900">
           <p className="text-sm leading-6">{step.note}</p>
           <span className="h-0.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">

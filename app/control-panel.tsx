@@ -178,6 +178,7 @@ export default function ControlPanel() {
             scenario={scenario}
             onScenarioChange={setScenarioId}
             autoplay={autoplay}
+            lastError={error}
           />
 
           <section className="grid gap-4 sm:grid-cols-2">
