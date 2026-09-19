@@ -12,11 +12,8 @@ import {
 } from "@/lib/controls";
 import type { CommandPlan, PlanItem } from "@/lib/plan";
 import { useSpeechRecognition } from "@/lib/use-speech-recognition";
-
-type CommandResponse = {
-  plan: CommandPlan;
-  usage: { input_tokens: number; output_tokens: number };
-};
+import type { CommandResult } from "@/app/api/command/route";
+import JevConsole, { type ConsoleEntry } from "./jev-console";
 
 const EXAMPLES = [
   "そろそろ寝るから照明落として通知も止めて",
@@ -32,8 +29,8 @@ export default function ControlPanel() {
   const [error, setError] = useState<string | null>(null);
   const [plan, setPlan] = useState<CommandPlan | null>(null);
   const [pending, setPending] = useState<PlanItem[]>([]);
-  const [usage, setUsage] = useState<CommandResponse["usage"] | null>(null);
-  const [elapsed, setElapsed] = useState<number | null>(null);
+  const [entries, setEntries] = useState<ConsoleEntry[]>([]);
+  const [inFlight, setInFlight] = useState<string | null>(null);
   const [flashing, setFlashing] = useState<string[]>([]);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -55,10 +52,13 @@ export default function ControlPanel() {
       if (!trimmed || loading) return;
 
       setLoading(true);
+      setInFlight(trimmed);
       setError(null);
       setPlan(null);
       setPending([]);
-      const startedAt = performance.now();
+
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const at = new Date().toLocaleTimeString("ja-JP", { hour12: false });
 
       try {
         const res = await fetch("/api/command", {
@@ -66,11 +66,21 @@ export default function ControlPanel() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ command: trimmed, state }),
         });
-        const data = (await res.json()) as CommandResponse & { error?: string };
-        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+        const data = (await res.json()) as CommandResult & { error?: string };
 
-        setElapsed(Math.round(performance.now() - startedAt));
-        setUsage(data.usage);
+        if (!res.ok) {
+          const message = data.error ?? `HTTP ${res.status}`;
+          setEntries((prev) => [
+            { id, at, command: trimmed, ok: false, error: message },
+            ...prev,
+          ]);
+          throw new Error(message);
+        }
+
+        setEntries((prev) => [
+          { id, at, command: trimmed, ok: true, result: data },
+          ...prev,
+        ]);
         setPlan(data.plan);
         applyItems(data.plan.items.filter((i) => i.verdict === "apply"));
         setPending(data.plan.items.filter((i) => i.verdict === "confirm"));
@@ -78,6 +88,7 @@ export default function ControlPanel() {
         setError(e instanceof Error ? e.message : "不明なエラー");
       } finally {
         setLoading(false);
+        setInFlight(null);
       }
     },
     [applyItems, loading, state],
@@ -98,7 +109,7 @@ export default function ControlPanel() {
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-6 py-12">
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-6 py-12">
       <header className="flex flex-col gap-2">
         <p className="font-mono text-xs uppercase tracking-widest text-zinc-500">
           TypeSafe AI · jev-latest · System One
@@ -107,140 +118,154 @@ export default function ControlPanel() {
           自然言語で動くコントロールパネル
         </h1>
         <p className="max-w-2xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-          指示を 1 回送ると、コントロール 1 つにつき「言及されたか」と「どの値にすべきか」の
-          2 問が jev に並列で投げられます。jev は文章を一切生成せず、確率つきの型つき答えだけを返し、
+          指示を 1 回送ると、コントロール 1
+          つにつき「言及されたか」と「どの値にすべきか」の 2 問が jev
+          に並列で投げられます。jev
+          は文章を一切生成せず、確率つきの型つき答えだけを返し、
           実際にスイッチを動かすのはこのページのコードです。
         </p>
       </header>
 
-      <section className="grid gap-4 sm:grid-cols-2">
-        {CONTROLS.map((control) => (
-          <ControlCard
-            key={control.id}
-            control={control}
-            value={state[control.id]}
-            flashing={flashing.includes(control.id)}
-            onChange={(next) =>
-              setState((prev) => ({ ...prev, [control.id]: next }))
-            }
-          />
-        ))}
-      </section>
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_400px] lg:items-start">
+        <div className="flex flex-col gap-6">
+          <section className="grid gap-4 sm:grid-cols-2">
+            {CONTROLS.map((control) => (
+              <ControlCard
+                key={control.id}
+                control={control}
+                value={state[control.id]}
+                flashing={flashing.includes(control.id)}
+                onChange={(next) =>
+                  setState((prev) => ({ ...prev, [control.id]: next }))
+                }
+              />
+            ))}
+          </section>
 
-      <section className="flex flex-col gap-3">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void send(command);
-          }}
-          className="flex gap-2"
-        >
-          <input
-            value={speech.listening && speech.interim ? speech.interim : command}
-            onChange={(e) => setCommand(e.target.value)}
-            readOnly={speech.listening}
-            placeholder={
-              speech.listening
-                ? "聞き取り中…"
-                : "やりたいことを日本語で入力（例: 寝るから暗くして）"
-            }
-            className={`flex-1 rounded-lg border bg-white px-4 py-3 text-sm outline-none dark:bg-zinc-950 ${
-              speech.listening
-                ? "border-red-400 text-zinc-500"
-                : "border-zinc-300 focus:border-zinc-900 dark:border-zinc-700 dark:focus:border-zinc-100"
-            }`}
-          />
-          {speech.supported && (
-            <button
-              type="button"
-              onClick={speech.toggle}
-              aria-pressed={speech.listening}
-              aria-label={speech.listening ? "音声入力を停止" : "音声入力を開始"}
-              title={speech.listening ? "停止" : "音声で入力"}
-              className={`flex w-12 items-center justify-center rounded-lg border transition-colors ${
-                speech.listening
-                  ? "animate-pulse border-red-500 bg-red-500 text-white"
-                  : "border-zinc-300 text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-zinc-100 dark:hover:text-zinc-100"
-              }`}
-            >
-              <MicIcon />
-            </button>
-          )}
-          <button
-            type="submit"
-            disabled={loading || command.trim() === ""}
-            className="rounded-lg bg-zinc-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
-          >
-            {loading ? "判定中…" : "実行"}
-          </button>
-        </form>
-
-        <div className="flex flex-wrap gap-2">
-          {EXAMPLES.map((example) => (
-            <button
-              key={example}
-              type="button"
-              onClick={() => {
-                setCommand(example);
-                void send(example);
+          <section className="flex flex-col gap-3">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void send(command);
               }}
-              className="rounded-full border border-zinc-300 px-3 py-1 text-xs text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-zinc-100 dark:hover:text-zinc-100"
+              className="flex gap-2"
             >
-              {example}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      {speech.error && (
-        <p className="text-xs text-red-600 dark:text-red-400">{speech.error}</p>
-      )}
-
-      {error && (
-        <p className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
-          {error}
-        </p>
-      )}
-
-      {pending.length > 0 && (
-        <section className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/40">
-          <h2 className="text-sm font-semibold text-amber-900 dark:text-amber-200">
-            確信度が低いので確認します
-          </h2>
-          {pending.map((item) => (
-            <div
-              key={item.controlId}
-              className="flex flex-wrap items-center justify-between gap-3 text-sm"
-            >
-              <span>
-                <strong>{item.label}</strong> を {item.fromLabel} →{" "}
-                {item.toLabel} に変更しますか？
-                <span className="ml-2 font-mono text-xs text-amber-800 dark:text-amber-300">
-                  confidence {item.confidence.toFixed(2)}
-                </span>
-              </span>
-              <span className="flex gap-2">
+              <input
+                value={
+                  speech.listening && speech.interim ? speech.interim : command
+                }
+                onChange={(e) => setCommand(e.target.value)}
+                readOnly={speech.listening}
+                placeholder={
+                  speech.listening
+                    ? "聞き取り中…"
+                    : "やりたいことを日本語で入力（例: 寝るから暗くして）"
+                }
+                className={`flex-1 rounded-lg border bg-white px-4 py-3 text-sm outline-none dark:bg-zinc-950 ${
+                  speech.listening
+                    ? "border-red-400 text-zinc-500"
+                    : "border-zinc-300 focus:border-zinc-900 dark:border-zinc-700 dark:focus:border-zinc-100"
+                }`}
+              />
+              {speech.supported && (
                 <button
                   type="button"
-                  onClick={() => resolvePending(item, true)}
-                  className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+                  onClick={speech.toggle}
+                  aria-pressed={speech.listening}
+                  aria-label={
+                    speech.listening ? "音声入力を停止" : "音声入力を開始"
+                  }
+                  title={speech.listening ? "停止" : "音声で入力"}
+                  className={`flex w-12 items-center justify-center rounded-lg border transition-colors ${
+                    speech.listening
+                      ? "animate-pulse border-red-500 bg-red-500 text-white"
+                      : "border-zinc-300 text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-zinc-100 dark:hover:text-zinc-100"
+                  }`}
                 >
-                  適用
+                  <MicIcon />
                 </button>
+              )}
+              <button
+                type="submit"
+                disabled={loading || command.trim() === ""}
+                className="rounded-lg bg-zinc-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
+              >
+                {loading ? "判定中…" : "実行"}
+              </button>
+            </form>
+
+            <div className="flex flex-wrap gap-2">
+              {EXAMPLES.map((example) => (
                 <button
+                  key={example}
                   type="button"
-                  onClick={() => resolvePending(item, false)}
-                  className="rounded-md border border-zinc-400 px-3 py-1.5 text-xs dark:border-zinc-600"
+                  onClick={() => {
+                    setCommand(example);
+                    void send(example);
+                  }}
+                  className="rounded-full border border-zinc-300 px-3 py-1 text-xs text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-zinc-100 dark:hover:text-zinc-100"
                 >
-                  やめる
+                  {example}
                 </button>
-              </span>
+              ))}
             </div>
-          ))}
-        </section>
-      )}
+          </section>
 
-      {plan && <PlanReport plan={plan} usage={usage} elapsed={elapsed} />}
+          {speech.error && (
+            <p className="text-xs text-red-600 dark:text-red-400">
+              {speech.error}
+            </p>
+          )}
+
+          {error && (
+            <p className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+              {error}
+            </p>
+          )}
+
+          {pending.length > 0 && (
+            <section className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/40">
+              <h2 className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+                確信度が低いので確認します
+              </h2>
+              {pending.map((item) => (
+                <div
+                  key={item.controlId}
+                  className="flex flex-wrap items-center justify-between gap-3 text-sm"
+                >
+                  <span>
+                    <strong>{item.label}</strong> を {item.fromLabel} →{" "}
+                    {item.toLabel} に変更しますか？
+                    <span className="ml-2 font-mono text-xs text-amber-800 dark:text-amber-300">
+                      confidence {item.confidence.toFixed(2)}
+                    </span>
+                  </span>
+                  <span className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => resolvePending(item, true)}
+                      className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    >
+                      適用
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => resolvePending(item, false)}
+                      className="rounded-md border border-zinc-400 px-3 py-1.5 text-xs dark:border-zinc-600"
+                    >
+                      やめる
+                    </button>
+                  </span>
+                </div>
+              ))}
+            </section>
+          )}
+
+          {plan && <PlanReport plan={plan} />}
+        </div>
+
+        <JevConsole entries={entries} inFlight={inFlight} />
+      </div>
     </div>
   );
 }
@@ -350,23 +375,13 @@ function ControlCard({
   );
 }
 
-function PlanReport({
-  plan,
-  usage,
-  elapsed,
-}: {
-  plan: CommandPlan;
-  usage: CommandResponse["usage"] | null;
-  elapsed: number | null;
-}) {
+function PlanReport({ plan }: { plan: CommandPlan }) {
   return (
     <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 p-5 dark:border-zinc-800">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-semibold">jev の判定</h2>
+        <h2 className="text-sm font-semibold">アプリの判断</h2>
         <p className="font-mono text-xs text-zinc-500">
-          {plan.items.length + plan.untouched.length} controls ×2 questions
-          {elapsed !== null && ` · ${elapsed}ms`}
-          {usage && ` · ${usage.input_tokens}in/${usage.output_tokens}out`}
+          確率の内訳は右のコンソールへ
         </p>
       </div>
 
@@ -377,36 +392,19 @@ function PlanReport({
       )}
 
       {plan.items.map((item) => (
-        <div key={item.controlId} className="flex flex-col gap-2">
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="font-medium">{item.label}</span>
-            <span className="font-mono text-xs text-zinc-500">
-              {item.fromLabel} → {item.toLabel}
-            </span>
-            <Badge verdict={item.verdict} />
-            <span className="font-mono text-[10px] text-zinc-400">
-              mentioned {item.mentioned.toFixed(2)} · confidence{" "}
-              {item.confidence.toFixed(2)}
-            </span>
-          </div>
-          <div className="flex flex-col gap-0.5">
-            {item.breakdown.map((row) => (
-              <div key={row.label} className="flex items-center gap-2">
-                <span className="w-40 shrink-0 truncate text-[11px] text-zinc-500">
-                  {row.label}
-                </span>
-                <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
-                  <span
-                    className="block h-full rounded-full bg-zinc-900 dark:bg-zinc-100"
-                    style={{ width: `${Math.round(row.probability * 100)}%` }}
-                  />
-                </span>
-                <span className="w-10 text-right font-mono text-[10px] text-zinc-400">
-                  {(row.probability * 100).toFixed(0)}%
-                </span>
-              </div>
-            ))}
-          </div>
+        <div
+          key={item.controlId}
+          className="flex flex-wrap items-center gap-2 text-sm"
+        >
+          <span className="font-medium">{item.label}</span>
+          <span className="font-mono text-xs text-zinc-500">
+            {item.fromLabel} → {item.toLabel}
+          </span>
+          <Badge verdict={item.verdict} />
+          <span className="font-mono text-[10px] text-zinc-400">
+            mentioned {item.mentioned.toFixed(2)} · confidence{" "}
+            {item.confidence.toFixed(2)}
+          </span>
         </div>
       ))}
 
@@ -430,7 +428,11 @@ function Badge({ verdict }: { verdict: PlanItem["verdict"] }) {
         ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
         : "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400";
   const label =
-    verdict === "apply" ? "適用" : verdict === "confirm" ? "要確認" : "変更なし";
+    verdict === "apply"
+      ? "適用"
+      : verdict === "confirm"
+        ? "要確認"
+        : "変更なし";
   return (
     <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${style}`}>
       {label}
