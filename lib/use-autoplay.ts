@@ -6,7 +6,14 @@ import type { PlanItem } from "./plan";
 import type { Scenario } from "./scenarios";
 
 export type AutoplayPhase =
-  "idle" | "resetting" | "typing" | "sending" | "confirming" | "holding";
+  | "idle"
+  | "resetting"
+  | "typing"
+  | "sending"
+  | "retrying"
+  | "suspended"
+  | "confirming"
+  | "holding";
 
 /** 1 文字あたりのタイプ速度（人が打っているように見せるため） */
 const TYPING_MS = 45;
@@ -18,6 +25,13 @@ const CONFIRM_HOLD = 3200;
 const RESET_HOLD = 1400;
 /** 進捗の更新間隔。実際の刻みはブラウザのタイマ制限で伸びることがある */
 const TICK_MS = 100;
+/** 数回までは短い間隔で同じ手順をやり直す */
+const RETRY_HOLD = 3000;
+/** 連続失敗がこの回数に達したら、先へ進めず復帰を待つ */
+const SUSPEND_AFTER = 3;
+/** 復帰待ちの基準間隔。失敗が続くほど倍にしていく */
+const RETRY_BASE = 5000;
+const RETRY_MAX = 60000;
 
 const CANCELLED = Symbol("cancelled");
 type Token = { cancelled: boolean };
@@ -34,6 +48,10 @@ export type AutoplayControls = {
   /** 待ち時間の残り（ミリ秒）。進捗バー用 */
   remaining: number;
   totalWait: number;
+  /** 連続して失敗した回数。成功すると 0 に戻る */
+  failures: number;
+  /** 連続失敗により、先へ進めず復帰を待っている状態か */
+  suspended: boolean;
   start: () => void;
   stop: () => void;
   togglePause: () => void;
@@ -65,11 +83,14 @@ export function useAutoplay({
   const [phase, setPhase] = useState<AutoplayPhase>("idle");
   const [remaining, setRemaining] = useState(0);
   const [totalWait, setTotalWait] = useState(0);
+  const [failures, setFailures] = useState(0);
+  const [suspended, setSuspended] = useState(false);
 
   const tokenRef = useRef<Token | null>(null);
   const pausedRef = useRef(false);
   const loopRef = useRef(loop);
   const skipRef = useRef(false);
+  const failuresRef = useRef(0);
 
   // ハンドラは毎回変わるので、ループ側は ref 越しに最新を呼ぶ
   const deps = useRef({ scenario, send, acceptPending, reset, setCommandText });
@@ -142,13 +163,58 @@ export function useAutoplay({
     }
   }, []);
 
+  /**
+   * 指示を送る。失敗したら同じ手順をやり直す。
+   *
+   * 連続失敗が続く間は先へ進めず、間隔を広げながら復帰を待つ。
+   * 無人で流しているときに、通信断や API キーの失効で
+   * シナリオだけが空回りし続けるのを避けるため。
+   */
+  const sendWithRecovery = useCallback(
+    async (command: string, token: Token): Promise<CommandResult | null> => {
+      for (;;) {
+        setPhase("sending");
+        const result = await deps.current.send(command);
+        if (token.cancelled) throw CANCELLED;
+
+        if (result) {
+          failuresRef.current = 0;
+          setFailures(0);
+          setSuspended(false);
+          return result;
+        }
+
+        failuresRef.current += 1;
+        setFailures(failuresRef.current);
+
+        if (failuresRef.current >= SUSPEND_AFTER) {
+          setSuspended(true);
+          setPhase("suspended");
+          const backoff = Math.min(
+            RETRY_BASE * 2 ** (failuresRef.current - SUSPEND_AFTER),
+            RETRY_MAX,
+          );
+          await wait(backoff, token);
+          continue;
+        }
+
+        setPhase("retrying");
+        await wait(RETRY_HOLD, token);
+      }
+    },
+    [wait],
+  );
+
   const stop = useCallback(() => {
     if (tokenRef.current) tokenRef.current.cancelled = true;
     tokenRef.current = null;
     pausedRef.current = false;
     skipRef.current = false;
+    failuresRef.current = 0;
     setRunning(false);
     setPaused(false);
+    setFailures(0);
+    setSuspended(false);
     setStepIndex(-1);
     setPhase("idle");
     setRemaining(0);
@@ -179,8 +245,7 @@ export function useAutoplay({
             setPhase("typing");
             await typeOut(steps[i].command, token);
 
-            setPhase("sending");
-            const result = await deps.current.send(steps[i].command);
+            const result = await sendWithRecovery(steps[i].command, token);
             if (token.cancelled) throw CANCELLED;
 
             const confirms =
@@ -203,7 +268,7 @@ export function useAutoplay({
         if (e !== CANCELLED) throw e;
       }
     })();
-  }, [stop, typeOut, wait]);
+  }, [sendWithRecovery, stop, typeOut, wait]);
 
   const togglePause = useCallback(() => {
     if (!tokenRef.current) return;
@@ -232,6 +297,8 @@ export function useAutoplay({
     phase,
     remaining,
     totalWait,
+    failures,
+    suspended,
     start,
     stop,
     togglePause,
