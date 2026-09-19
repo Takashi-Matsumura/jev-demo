@@ -1,12 +1,5 @@
 import { CONTROLS, formatValue, type PanelState } from "@/lib/controls";
-import {
-  askJev,
-  ENDPOINT,
-  JevError,
-  MODEL,
-  type JevQuestion,
-  type JevResponse,
-} from "@/lib/jev";
+import { askJev, ENDPOINT, JevError, MODEL, type JevExchange } from "@/lib/jev";
 import { buildPlan, buildQuestions, type CommandPlan } from "@/lib/plan";
 
 export type CommandRequest = {
@@ -14,18 +7,9 @@ export type CommandRequest = {
   state: PanelState;
 };
 
-/** コンソールに出すため、jev に送った内容をそのまま返す。 */
 export type CommandResult = {
   plan: CommandPlan;
-  request: {
-    endpoint: string;
-    model: string;
-    state: unknown;
-    questions: Record<string, JevQuestion>;
-  };
-  response: JevResponse;
-  /** サーバ側で計測した jev の応答時間（ミリ秒） */
-  elapsedMs: number;
+  exchange: JevExchange;
 };
 
 export async function POST(request: Request) {
@@ -52,32 +36,18 @@ export async function POST(request: Request) {
       value: formatValue(c, state[c.id] ?? c.initial),
     })),
   };
-  const questions = buildQuestions();
 
   try {
-    const startedAt = performance.now();
-    const response = await askJev(jevState, questions);
-    const elapsedMs = Math.round(performance.now() - startedAt);
-
+    const exchange = await askJev(jevState, buildQuestions());
     const result: CommandResult = {
-      plan: buildPlan(response.answers, state),
-      request: { endpoint: ENDPOINT, model: MODEL, state: jevState, questions },
-      response,
-      elapsedMs,
+      plan: buildPlan(exchange.response.answers, state),
+      exchange,
     };
     return Response.json(result);
   } catch (error) {
     if (error instanceof JevError) {
       return Response.json(
-        {
-          error: error.message,
-          request: {
-            endpoint: ENDPOINT,
-            model: MODEL,
-            state: jevState,
-            questions,
-          },
-        },
+        { error: error.message, endpoint: ENDPOINT, model: MODEL },
         { status: error.status },
       );
     }

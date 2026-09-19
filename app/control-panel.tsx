@@ -78,7 +78,7 @@ export default function ControlPanel() {
         }
 
         setEntries((prev) => [
-          { id, at, command: trimmed, ok: true, result: data },
+          { id, at, command: trimmed, ok: true, exchange: data.exchange },
           ...prev,
         ]);
         setPlan(data.plan);

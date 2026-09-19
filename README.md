@@ -1,8 +1,13 @@
 # jev-demo
 
-[TypeSafe AI](https://typesafe.ai/) の **jev**（System One モデル）で、自然言語の指示から Web アプリの UI を操作するデモです。
+[TypeSafe AI](https://typesafe.ai/) の **jev**（System One モデル）を組み込んだ Next.js のデモです。
 
-「そろそろ寝るから照明落として通知も止めて」と入力（または音声で発話）すると、画面上のトグル・スライダー・選択ボタンが実際に動きます。
+2 つのデモが入っています。
+
+| | 内容 |
+| --- | --- |
+| [コントロールパネル](#コントロールパネル) (`/`) | 「そろそろ寝るから照明落として通知も止めて」と入力または発話すると、画面上のトグル・スライダー・選択ボタンが実際に動く |
+| [PDF 事前チェック](#pdf-事前チェック) (`/screening`) | 社外の AI に PDF を渡す前に、個人情報や機密情報が含まれていないかを判定する |
 
 <img width="900" alt="コントロールパネル" src="docs/screenshot.png">
 
@@ -24,7 +29,9 @@ jev はテキストを一切生成しません。`state`（現在の状態）と
 自然言語 ──▶ jev（判定）──▶ アプリのコードが setState ──▶ UI が変わる
 ```
 
-## 仕組み
+## コントロールパネル
+
+### 仕組み
 
 コントロール 1 つにつき質問を 2 問つくり、**全部まとめて 1 リクエストで並列評価**させます（7 コントロール = 14 問、実測 600〜900ms）。
 
@@ -46,11 +53,11 @@ jev はテキストを一切生成しません。`state`（現在の状態）と
 
 曖昧な指示ほど確率が割れるので、`確信度が低いので確認します` のバーが出ます。確率分布そのものは右の [jev コンソール](#jev-コンソール) で確認できます。
 
-### 言及判定のコツ
+#### 言及判定のコツ
 
 各コントロールには `mentionHint`（どんな表現なら言及とみなすか）を持たせています。ラベル名だけを渡すと、たとえば「通知も止めて」という明示的な指示があっても「おやすみモード」という単語を使っていないために言及なし（0.31）と判定されてしまいました。hint を criteria に含めることで 0.97 まで改善しています。**`instructions` と `criteria` の書き方が精度にそのまま効きます。**
 
-## コントロール
+### コントロール
 
 | 種別 | コントロール |
 | --- | --- |
@@ -78,6 +85,41 @@ jev はテキストを一切生成しません。`state`（現在の状態）と
 
 Web Speech API を使い、発話が確定した時点でそのまま jev に送ります。Chrome / Safari で動作し、非対応ブラウザではマイクボタンを表示しません。
 
+## PDF 事前チェック
+
+<img width="900" alt="PDF 事前チェック" src="docs/screening.png">
+
+ローカル LLM のチャットアプリなどに PDF を添付する前段のゲートです。D&D した時点で判定が走り、**アップロードする前に**渡してよい文書かどうかが分かります。
+
+この用途に jev が向いているのは、**文章を生成しないから**です。返ってくるのはカテゴリごとの確率だけで、判定結果に本文が要約されて出てくることがありません。「中身を見ずに、中身の性質だけを数値で受け取る」形になります。
+
+### 質問の構成
+
+チャンクごとに 14 問を 1 リクエストで投げます（`lib/screening.ts`）。
+
+| 種別 | 質問 |
+| --- | --- |
+| Noul × 11 | 個人名 / 連絡先 / 公的な識別番号 / 金融情報 / 認証情報 / 要配慮個人情報 / 人事情報 / 顧客・取引先情報 / 社外秘の経営情報 / 機密表示 / 非公開の技術情報 |
+| Score | 社外の AI に渡した場合のリスク（5 段階） |
+| Choice | 文書の種類 |
+| Choice | jev 自身の総合判断（allow / redact / block） |
+
+### 集約と判定
+
+長い PDF は 1200 字前後のチャンクに割り（最大 16）、同じ質問セットを並列で投げます。カテゴリごとに**全チャンクの最大値**を採ります。1 箇所でも該当すれば文書全体が該当だからです。
+
+| 条件 | 結論 |
+| --- | --- |
+| 重大カテゴリ（識別番号・金融・認証・要配慮・技術情報）のいずれかが 0.8 以上 | **渡さない** |
+| いずれかのカテゴリが 0.5 以上 | **要確認** |
+| それ以外 | 渡してよい |
+
+最終的な結論はこのしきい値で決めています。jev 自身の総合判断も並べて表示するので、両者を見比べられます。
+
+### データの扱い
+
+PDF の解析は **ブラウザ内**（[unpdf](https://github.com/unjs/unpdf)）で行われ、ファイル自体はサーバに送られません。ただし**抽出したテキストは判定のため TypeSafe の API に送信されます**。外部に一切出せない文書に使う場合は、jev 互換のローカルモデルに向き先を変えてください。差し替えは `lib/jev.ts` の `ENDPOINT` / `MODEL` の 1 箇所です。
+
 ## セットアップ
 
 ```bash
@@ -86,7 +128,7 @@ cp .env.example .env.local   # TYPESAFE_API_KEY を記入
 npm run dev
 ```
 
-API キーは [TypeSafe のコンソール](https://console.typesafe.ai/)の **API Keys** から発行します。キーはサーバ側の Route Handler (`app/api/command/route.ts`) でのみ読み、クライアントには渡していません。
+API キーは [TypeSafe のコンソール](https://console.typesafe.ai/)の **API Keys** から発行します。キーはサーバ側の Route Handler でのみ読み、クライアントには渡していません。
 
 ```bash
 npm run typecheck   # tsc --noEmit
@@ -97,13 +139,16 @@ npm run build       # 本番ビルド
 ## 構成
 
 ```
-lib/jev.ts                   POST /v1/systemone の型つきクライアント
-lib/controls.ts              コントロール定義（UI と質問生成の唯一の情報源）
-lib/plan.ts                  質問の組み立てと、回答 → 操作プランへの変換
+lib/jev.ts                     POST /v1/systemone の型つきクライアント
+lib/controls.ts                コントロール定義（UI と質問生成の唯一の情報源）
+lib/plan.ts                    指示 → 操作プランへの変換
+lib/screening.ts               PDF 判定のカテゴリ定義と集約ルール
 lib/use-speech-recognition.ts  Web Speech API の最小ラッパー
-app/api/command/route.ts     API キーをサーバ側に閉じ込めるハンドラ。送信内容もそのまま返す
-app/control-panel.tsx        パネル UI
-app/jev-console.tsx          jev との入出力を表示するコンソール
+app/api/command/route.ts       コントロールパネル用のハンドラ
+app/api/screen/route.ts        PDF 判定用のハンドラ。チャンクを並列で投げる
+app/control-panel.tsx          パネル UI
+app/screening/pdf-screener.tsx D&D と判定結果の UI
+app/jev-console.tsx            jev との入出力を表示するコンソール（両方の画面で共用）
 ```
 
 Next.js 16 (App Router, Turbopack) / React 19 / Tailwind CSS v4。

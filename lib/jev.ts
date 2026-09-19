@@ -51,6 +51,22 @@ export type JevResponse = {
   usage: { input_tokens: number; output_tokens: number };
 };
 
+/**
+ * 1 回のやり取りの記録。コンソールに出すため、送った内容もそのまま持つ。
+ * クライアント側で組み立て直すと、表示用と実際に送った値がずれ得るため。
+ */
+export type JevExchange = {
+  request: {
+    endpoint: string;
+    model: string;
+    state: unknown;
+    questions: Record<string, JevQuestion>;
+  };
+  response: JevResponse;
+  /** サーバ側で計測した jev の応答時間（ミリ秒） */
+  elapsedMs: number;
+};
+
 export class JevError extends Error {
   constructor(
     message: string,
@@ -65,12 +81,13 @@ export class JevError extends Error {
 export async function askJev(
   state: unknown,
   questions: Record<string, JevQuestion>,
-): Promise<JevResponse> {
+): Promise<JevExchange> {
   const apiKey = process.env.TYPESAFE_API_KEY;
   if (!apiKey) {
     throw new JevError("TYPESAFE_API_KEY が設定されていません", 500);
   }
 
+  const startedAt = performance.now();
   const res = await fetch(ENDPOINT, {
     method: "POST",
     headers: {
@@ -87,5 +104,9 @@ export async function askJev(
     );
   }
 
-  return (await res.json()) as JevResponse;
+  return {
+    request: { endpoint: ENDPOINT, model: MODEL, state, questions },
+    response: (await res.json()) as JevResponse,
+    elapsedMs: Math.round(performance.now() - startedAt),
+  };
 }
