@@ -11,6 +11,7 @@ import {
   type PanelState,
 } from "@/lib/controls";
 import type { CommandPlan, PlanItem } from "@/lib/plan";
+import { useSpeechRecognition } from "@/lib/use-speech-recognition";
 
 type CommandResponse = {
   plan: CommandPlan;
@@ -82,6 +83,15 @@ export default function ControlPanel() {
     [applyItems, loading, state],
   );
 
+  // 発話が確定したらそのまま jev に投げる
+  const speech = useSpeechRecognition({
+    onFinal: (transcript) => {
+      if (!transcript) return;
+      setCommand(transcript);
+      void send(transcript);
+    },
+  });
+
   const resolvePending = (item: PlanItem, accept: boolean) => {
     if (accept) applyItems([item]);
     setPending((prev) => prev.filter((p) => p.controlId !== item.controlId));
@@ -126,11 +136,36 @@ export default function ControlPanel() {
           className="flex gap-2"
         >
           <input
-            value={command}
+            value={speech.listening && speech.interim ? speech.interim : command}
             onChange={(e) => setCommand(e.target.value)}
-            placeholder="やりたいことを日本語で入力（例: 寝るから暗くして）"
-            className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-3 text-sm outline-none focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-zinc-100"
+            readOnly={speech.listening}
+            placeholder={
+              speech.listening
+                ? "聞き取り中…"
+                : "やりたいことを日本語で入力（例: 寝るから暗くして）"
+            }
+            className={`flex-1 rounded-lg border bg-white px-4 py-3 text-sm outline-none dark:bg-zinc-950 ${
+              speech.listening
+                ? "border-red-400 text-zinc-500"
+                : "border-zinc-300 focus:border-zinc-900 dark:border-zinc-700 dark:focus:border-zinc-100"
+            }`}
           />
+          {speech.supported && (
+            <button
+              type="button"
+              onClick={speech.toggle}
+              aria-pressed={speech.listening}
+              aria-label={speech.listening ? "音声入力を停止" : "音声入力を開始"}
+              title={speech.listening ? "停止" : "音声で入力"}
+              className={`flex w-12 items-center justify-center rounded-lg border transition-colors ${
+                speech.listening
+                  ? "animate-pulse border-red-500 bg-red-500 text-white"
+                  : "border-zinc-300 text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-zinc-100 dark:hover:text-zinc-100"
+              }`}
+            >
+              <MicIcon />
+            </button>
+          )}
           <button
             type="submit"
             disabled={loading || command.trim() === ""}
@@ -156,6 +191,10 @@ export default function ControlPanel() {
           ))}
         </div>
       </section>
+
+      {speech.error && (
+        <p className="text-xs text-red-600 dark:text-red-400">{speech.error}</p>
+      )}
 
       {error && (
         <p className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
@@ -203,6 +242,24 @@ export default function ControlPanel() {
 
       {plan && <PlanReport plan={plan} usage={usage} elapsed={elapsed} />}
     </div>
+  );
+}
+
+function MicIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      className="h-5 w-5"
+      aria-hidden="true"
+    >
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0" />
+      <path d="M12 18v3" />
+    </svg>
   );
 }
 
