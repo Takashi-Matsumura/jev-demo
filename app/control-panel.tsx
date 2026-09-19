@@ -33,6 +33,8 @@ export default function ControlPanel() {
   const [plan, setPlan] = useState<CommandPlan | null>(null);
   const [pending, setPending] = useState<PlanItem[]>([]);
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
+  // 直近の指示で jev が動かしたコントロール。オートプレイ中の注目表示に使う
+  const [spotlight, setSpotlight] = useState<PlanItem[]>([]);
   const [inFlight, setInFlight] = useState<string | null>(null);
   const [flashing, setFlashing] = useState<string[]>([]);
   const [scenarioId, setScenarioId] = useState(SCENARIOS[0].id);
@@ -68,6 +70,7 @@ export default function ControlPanel() {
       setError(null);
       setPlan(null);
       setPending([]);
+      setSpotlight([]);
 
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const at = new Date().toLocaleTimeString("ja-JP", { hour12: false });
@@ -94,6 +97,7 @@ export default function ControlPanel() {
           ...prev,
         ]);
         setPlan(data.plan);
+        setSpotlight(data.plan.items.filter((i) => i.verdict !== "unchanged"));
         applyItems(data.plan.items.filter((i) => i.verdict === "apply"));
         setPending(data.plan.items.filter((i) => i.verdict === "confirm"));
         return data;
@@ -134,6 +138,7 @@ export default function ControlPanel() {
     setPending([]);
     setError(null);
     setEntries([]);
+    setSpotlight([]);
   }, []);
 
   /** オートプレイ中は確認を待たずに自動で承認する。 */
@@ -152,6 +157,15 @@ export default function ControlPanel() {
     reset,
     setCommandText: setCommand,
   });
+
+  // 注目表示はオートプレイ中だけ。手で触っているときは邪魔になる
+  const spotlightMap = useMemo(
+    () =>
+      new Map(
+        autoplay.running ? spotlight.map((item) => [item.controlId, item]) : [],
+      ),
+    [autoplay.running, spotlight],
+  );
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-6 py-12">
@@ -188,6 +202,8 @@ export default function ControlPanel() {
                 control={control}
                 value={state[control.id]}
                 flashing={flashing.includes(control.id)}
+                spotlight={spotlightMap.get(control.id) ?? null}
+                dimmed={spotlightMap.size > 0 && !spotlightMap.has(control.id)}
                 onChange={(next) =>
                   setState((prev) => ({ ...prev, [control.id]: next }))
                 }
@@ -345,21 +361,52 @@ function ControlCard({
   control,
   value,
   flashing,
+  spotlight,
+  dimmed,
   onChange,
 }: {
   control: Control;
   value: ControlValue;
   flashing: boolean;
+  /** jev がこのコントロールを動かしたときの内訳。注目表示に使う */
+  spotlight: PlanItem | null;
+  /** 今回の指示で動かなかったので、背景に下げる */
+  dimmed: boolean;
   onChange: (next: ControlValue) => void;
 }) {
+  const needsConfirm = spotlight?.verdict === "confirm";
+
   return (
     <div
-      className={`flex flex-col gap-3 rounded-xl border p-4 transition-colors duration-500 ${
-        flashing
-          ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40"
-          : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950"
+      className={`relative flex flex-col gap-3 rounded-xl border p-4 transition-all duration-500 ${
+        spotlight
+          ? `z-10 scale-[1.03] bg-white shadow-lg dark:bg-zinc-950 ${
+              needsConfirm
+                ? "border-amber-500 ring-2 ring-amber-500/40"
+                : "border-emerald-500 ring-2 ring-emerald-500/40"
+            }`
+          : dimmed
+            ? "border-zinc-200 bg-white opacity-30 dark:border-zinc-800 dark:bg-zinc-950"
+            : flashing
+              ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40"
+              : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950"
       }`}
     >
+      {spotlight && (
+        <span
+          className={`absolute -top-2.5 left-3 z-20 flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[10px] font-medium text-white shadow ${
+            needsConfirm ? "bg-amber-600" : "bg-emerald-600"
+          }`}
+        >
+          {needsConfirm ? "要確認" : "jev が変更"}
+          <span className="font-mono opacity-90">
+            {spotlight.fromLabel} → {spotlight.toLabel}
+          </span>
+          <span className="font-mono opacity-70">
+            {spotlight.confidence.toFixed(2)}
+          </span>
+        </span>
+      )}
       <div className="flex items-center justify-between">
         <span className="text-sm font-medium">{control.label}</span>
         <span className="font-mono text-xs text-zinc-500">

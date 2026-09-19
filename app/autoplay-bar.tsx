@@ -3,17 +3,18 @@
 import type { AutoplayControls, AutoplayPhase } from "@/lib/use-autoplay";
 import type { Scenario } from "@/lib/scenarios";
 
+// 1 行に収まる短さにする。長いと上段が折り返して、
+// コントロールパネル全体が上下にずれてしまう。
 const PHASE_LABELS: Record<AutoplayPhase, string> = {
   idle: "停止中",
-  resetting: "初期状態に戻しています",
+  resetting: "初期化",
   typing: "入力中",
-  sending: "jev に問い合わせ中",
-  retrying: "失敗したのでやり直します",
-  suspended: "中断中（復帰を待っています）",
-  confirming: "確認待ち（まもなく自動で承認します）",
-  holding: "結果を表示中",
+  sending: "問い合わせ中",
+  retrying: "再試行",
+  suspended: "中断中",
+  confirming: "確認待ち",
+  holding: "表示中",
 };
-
 export default function AutoplayBar({
   scenarios,
   scenario,
@@ -120,50 +121,54 @@ export default function AutoplayBar({
           繰り返す
         </label>
 
-        <span className="ml-auto font-mono text-[10px] text-zinc-400">
+        <span className="ml-auto shrink-0 whitespace-nowrap font-mono text-[10px] text-zinc-400">
           {running
             ? `${Math.max(stepIndex + 1, 1)} / ${scenario.steps.length} · ${PHASE_LABELS[phase]}`
-            : scenario.description}
+            : PHASE_LABELS.idle}
         </span>
       </div>
 
-      {suspended && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-red-300 bg-red-50 px-4 py-3 dark:border-red-900 dark:bg-red-950/50">
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-red-900 dark:text-red-200">
-              jev への問い合わせが {failures} 回続けて失敗しました
-            </p>
-            <p className="mt-0.5 text-xs leading-5 text-red-800 dark:text-red-300">
-              シナリオを進めずに、同じ手順で再試行しています
-              {remaining > 0 && `（あと ${Math.ceil(remaining / 1000)} 秒）`}。
-              {lastError && (
-                <span className="ml-1 font-mono text-[10px] opacity-80">
-                  {lastError}
-                </span>
-              )}
-            </p>
+      {/*
+        再生中に高さが変わると、下のコントロールパネルが上下にずれて
+        肝心の操作から目が離れてしまう。説明・中断・停止中のいずれも
+        同じ高さの枠に収める。
+      */}
+      <div className="flex min-h-[78px] flex-col justify-center gap-2 rounded-lg bg-zinc-50 px-4 py-3 dark:bg-zinc-900">
+        {suspended ? (
+          <div className="flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-red-700 dark:text-red-300">
+                jev への問い合わせが {failures} 回続けて失敗しました
+              </p>
+              <p className="truncate text-xs leading-5 text-red-700/80 dark:text-red-300/80">
+                同じ手順で再試行しています
+                {remaining > 0 && `（あと ${Math.ceil(remaining / 1000)} 秒）`}
+                {lastError && ` · ${lastError}`}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={autoplay.skip}
+              className="shrink-0 rounded-md border border-red-400 px-3 py-1.5 text-xs text-red-700 dark:border-red-800 dark:text-red-300"
+            >
+              今すぐ再試行
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={autoplay.skip}
-            className="rounded-md border border-red-400 px-3 py-1.5 text-xs text-red-900 dark:border-red-800 dark:text-red-200"
-          >
-            今すぐ再試行
-          </button>
-        </div>
-      )}
-
-      {step && !suspended && (
-        <div className="flex flex-col gap-2 rounded-lg bg-zinc-50 px-4 py-3 dark:bg-zinc-900">
+        ) : step ? (
           <p className="text-sm leading-6">{step.note}</p>
-          <span className="h-0.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
-            <span
-              className="block h-full rounded-full bg-zinc-900 transition-[width] duration-100 ease-linear dark:bg-zinc-100"
-              style={{ width: `${Math.round(progress * 100)}%` }}
-            />
-          </span>
-        </div>
-      )}
+        ) : (
+          <p className="text-sm leading-6 text-zinc-500">
+            {scenario.description}
+          </p>
+        )}
+
+        <span className="h-0.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+          <span
+            className="block h-full rounded-full bg-zinc-900 transition-[width] duration-100 ease-linear dark:bg-zinc-100"
+            style={{ width: `${Math.round(progress * 100)}%` }}
+          />
+        </span>
+      </div>
     </section>
   );
 }
