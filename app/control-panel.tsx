@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CONTROLS,
   INITIAL_STATE,
@@ -13,7 +13,10 @@ import {
 import type { CommandPlan, PlanItem } from "@/lib/plan";
 import { useSpeechRecognition } from "@/lib/use-speech-recognition";
 import type { CommandResult } from "@/app/api/command/route";
+import { SCENARIOS } from "@/lib/scenarios";
+import { useAutoplay } from "@/lib/use-autoplay";
 import JevConsole, { type ConsoleEntry } from "./jev-console";
+import AutoplayBar from "./autoplay-bar";
 
 const EXAMPLES = [
   "そろそろ寝るから照明落として通知も止めて",
@@ -32,7 +35,15 @@ export default function ControlPanel() {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
   const [inFlight, setInFlight] = useState<string | null>(null);
   const [flashing, setFlashing] = useState<string[]>([]);
+  const [scenarioId, setScenarioId] = useState(SCENARIOS[0].id);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // オートプレイのループから呼ぶため、送信時は最新の状態を ref 越しに読む
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  });
+  const busyRef = useRef(false);
 
   const applyItems = useCallback((items: PlanItem[]) => {
     if (items.length === 0) return;
@@ -47,10 +58,11 @@ export default function ControlPanel() {
   }, []);
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string): Promise<CommandResult | null> => {
       const trimmed = text.trim();
-      if (!trimmed || loading) return;
+      if (!trimmed || busyRef.current) return null;
 
+      busyRef.current = true;
       setLoading(true);
       setInFlight(trimmed);
       setError(null);
@@ -64,7 +76,7 @@ export default function ControlPanel() {
         const res = await fetch("/api/command", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ command: trimmed, state }),
+          body: JSON.stringify({ command: trimmed, state: stateRef.current }),
         });
         const data = (await res.json()) as CommandResult & { error?: string };
 
@@ -84,14 +96,17 @@ export default function ControlPanel() {
         setPlan(data.plan);
         applyItems(data.plan.items.filter((i) => i.verdict === "apply"));
         setPending(data.plan.items.filter((i) => i.verdict === "confirm"));
+        return data;
       } catch (e) {
         setError(e instanceof Error ? e.message : "不明なエラー");
+        return null;
       } finally {
+        busyRef.current = false;
         setLoading(false);
         setInFlight(null);
       }
     },
-    [applyItems, loading, state],
+    [applyItems],
   );
 
   // 発話が確定したらそのまま jev に投げる
@@ -107,6 +122,36 @@ export default function ControlPanel() {
     if (accept) applyItems([item]);
     setPending((prev) => prev.filter((p) => p.controlId !== item.controlId));
   };
+
+  const scenario = useMemo(
+    () => SCENARIOS.find((s) => s.id === scenarioId) ?? SCENARIOS[0],
+    [scenarioId],
+  );
+
+  const reset = useCallback(() => {
+    setState(INITIAL_STATE);
+    setPlan(null);
+    setPending([]);
+    setError(null);
+    setEntries([]);
+  }, []);
+
+  /** オートプレイ中は確認を待たずに自動で承認する。 */
+  const acceptPending = useCallback(
+    (items: PlanItem[]) => {
+      applyItems(items);
+      setPending([]);
+    },
+    [applyItems],
+  );
+
+  const autoplay = useAutoplay({
+    scenario,
+    send,
+    acceptPending,
+    reset,
+    setCommandText: setCommand,
+  });
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-6 py-12">
@@ -128,6 +173,13 @@ export default function ControlPanel() {
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_400px] lg:items-start">
         <div className="flex flex-col gap-6">
+          <AutoplayBar
+            scenarios={SCENARIOS}
+            scenario={scenario}
+            onScenarioChange={setScenarioId}
+            autoplay={autoplay}
+          />
+
           <section className="grid gap-4 sm:grid-cols-2">
             {CONTROLS.map((control) => (
               <ControlCard
@@ -187,7 +239,7 @@ export default function ControlPanel() {
               )}
               <button
                 type="submit"
-                disabled={loading || command.trim() === ""}
+                disabled={loading || autoplay.running || command.trim() === ""}
                 className="rounded-lg bg-zinc-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
               >
                 {loading ? "判定中…" : "実行"}
@@ -203,7 +255,7 @@ export default function ControlPanel() {
                     setCommand(example);
                     void send(example);
                   }}
-                  className="rounded-full border border-zinc-300 px-3 py-1 text-xs text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-zinc-100 dark:hover:text-zinc-100"
+                  className="rounded-full border border-zinc-300 px-3 py-1 text-xs text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-zinc-100 dark:hover:text-zinc-100"
                 >
                   {example}
                 </button>
